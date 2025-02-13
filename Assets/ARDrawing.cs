@@ -2,144 +2,174 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.EventSystems;
+using UnityEngine.UI; // Required for UI elements
 using UnityEngine.XR.ARFoundation;
 
 public class ARDrawing : MonoBehaviour
 {
-    public Camera arCamera;  // Reference to the AR Camera
-    public float brushSize = 0.01f;  // Size of the brush stroke
+    public Camera arCamera;  
+    public float brushSize = 0.01f;  // Default brush size
     public Color brushColor = Color.red;  // Default brush color
-    
-    private LineRenderer currentLine; // The current stroke being drawn
-    private List<Vector3> positions = new List<Vector3>(); // Stores stroke positions
-    private InputAction touchInput; // Handles touch/mouse input
-    private bool isDrawing = false; // Flag to check if the user is drawing
+
+    private LineRenderer currentLine; 
+    private List<Vector3> positions = new List<Vector3>(); 
+    private InputAction touchInput; 
+    private bool isDrawing = false; 
+
+    private List<GameObject> strokes = new List<GameObject>(); // Stores all strokes
+
+    [Header("UI Elements")]
+    public Slider brushSizeSlider;  // Reference to the UI slider
+    public Image brushPreview; // Reference to the preview UI element
+     public Button undoButton;  // Reference to Undo button
 
     void Awake()
     {
-        // Initialize the InputAction for touch input
+        // Initialize touch input
         touchInput = new InputAction("Touch", binding: "<Pointer>/position");
         touchInput.Enable();
+
+        // Attach slider event listener
+        brushSizeSlider.onValueChanged.AddListener(UpdateBrushSize);
+
+         // Attach the Undo function to the button
+        if (undoButton != null)
+        {
+            undoButton.onClick.AddListener(UndoLastStroke);
+        }
     }
 
     void Update()
     {
-        // Handle input differently for Unity Editor and mobile devices
         if (Application.isEditor)
         {
-            SimulateTouchWithMouse(); // Simulates touch using mouse input in the Unity Editor
+            SimulateTouchWithMouse();
         }
         else
         {
-            HandleTouchInput(); // Handles actual touch input on mobile
+            HandleTouchInput();
+        }
+        
+        UpdateBrushPreview(); // Update preview each frame
+    }
+
+
+    /// Updates the brush preview UI element.
+    void UpdateBrushPreview()
+    {
+        if (brushPreview != null)
+        {
+            brushPreview.color = brushColor; // Change color dynamically
+
+            // Convert world space size to UI space by using a multiplier
+            float uiSize = brushSize * 2000;  // Adjust multiplier to better match stroke size
+            brushPreview.rectTransform.sizeDelta = new Vector2(uiSize, uiSize);
         }
     }
 
-    /// <summary>
-    /// Handles real touch input for mobile devices.
-    /// Ensures proper stroke separation by resetting currentLine when touch is released.
-    /// </summary>
+
+    /// Updates the brush size when the slider is changed.
+    void UpdateBrushSize(float newSize)
+    {
+        brushSize = newSize;
+        UpdateBrushPreview(); // Ensure preview updates immediately
+    }
+
+
     void HandleTouchInput()
     {
-        var touch = Touchscreen.current.primaryTouch; // Get primary touch data
+        var touch = Touchscreen.current.primaryTouch;
 
-        if (touch.press.wasPressedThisFrame && !IsPointerOverUI()) // If the user just touched the screen
+        if (touch.press.wasPressedThisFrame && !IsPointerOverUI())
         {
-            StartNewStroke(); // Start a new stroke
+            StartNewStroke();
             isDrawing = true;
         }
-        else if (touch.press.isPressed && isDrawing) // If the user is still touching the screen
+        else if (touch.press.isPressed && isDrawing)
         {
-            AddPointToStroke(); // Add points to the current stroke
+            AddPointToStroke();
         }
-        else if (touch.press.wasReleasedThisFrame) // If the user lifted their finger
+        else if (touch.press.wasReleasedThisFrame)
         {
             isDrawing = false;
-            currentLine = null; // Reset the currentLine so new strokes are separate
+            currentLine = null;
         }
     }
 
-    /// <summary>
-    /// Prevents drawing if the touch/click is over a UI element.
-    /// </summary>
     bool IsPointerOverUI()
     {
         return EventSystem.current.IsPointerOverGameObject();
     }
 
-    /// <summary>
-    /// Simulates touch input using the mouse in the Unity Editor.
-    /// Allows testing in Play Mode before deploying to a mobile device.
-    /// </summary>
     void SimulateTouchWithMouse()
     {
-        if (Mouse.current.leftButton.wasPressedThisFrame && !IsPointerOverUI()) // If the user clicks the mouse
+        if (Mouse.current.leftButton.wasPressedThisFrame && !IsPointerOverUI())
         {
-            StartNewStroke(); // Start a new stroke
+            StartNewStroke();
             isDrawing = true;
         }
-        else if (Mouse.current.leftButton.isPressed && isDrawing) // If the user holds the mouse button
+        else if (Mouse.current.leftButton.isPressed && isDrawing)
         {
-            AddPointToStroke(); // Continue drawing
+            AddPointToStroke();
         }
-        else if (Mouse.current.leftButton.wasReleasedThisFrame) // If the user releases the mouse button
+        else if (Mouse.current.leftButton.wasReleasedThisFrame)
         {
             isDrawing = false;
-            currentLine = null; // Reset the currentLine so new strokes are separate
+            currentLine = null;
         }
     }
 
-    /// <summary>
-    /// Starts a new stroke by creating a new GameObject with a LineRenderer.
-    /// </summary>
     void StartNewStroke()
     {
-        GameObject newStroke = new GameObject("Stroke"); // Create a new empty GameObject for the stroke
-        currentLine = newStroke.AddComponent<LineRenderer>(); // Add a LineRenderer to handle drawing
+        GameObject newStroke = new GameObject("Stroke");
+        currentLine = newStroke.AddComponent<LineRenderer>();
 
-        // Set the properties of the LineRenderer
         currentLine.startWidth = brushSize;
         currentLine.endWidth = brushSize;
-        currentLine.material = new Material(Shader.Find("Sprites/Default")); // Assign a default material
+        currentLine.material = new Material(Shader.Find("Sprites/Default"));
         currentLine.startColor = brushColor;
         currentLine.endColor = brushColor;
-        currentLine.positionCount = 0; // No points initially
+        currentLine.positionCount = 0;
 
-        positions.Clear(); // Clear the list of positions to start fresh
+        positions.Clear();
+
+        // Store the stroke in the list
+        strokes.Add(newStroke);
     }
 
-    /// <summary>
-    /// Adds a new point to the current stroke.
-    /// Prevents unnecessary points by only adding if a minimum distance is met.
-    /// </summary>
-    void AddPointToStroke()
+    /// Removes the last stroke from the scene.
+    public void UndoLastStroke()
     {
-        Vector3 worldPosition = GetWorldPosition(); // Convert touch position to world coordinates
-
-        // Ensure we only add a new point if it's far enough from the last point
-        if (positions.Count == 0 || Vector3.Distance(worldPosition, positions[positions.Count - 1]) > 0.01f)
+        if (strokes.Count > 0)
         {
-            positions.Add(worldPosition); // Add new position to the list
-            currentLine.positionCount = positions.Count; // Update LineRenderer count
-            currentLine.SetPositions(positions.ToArray()); // Apply new positions to the stroke
+            GameObject lastStroke = strokes[strokes.Count - 1];
+            strokes.RemoveAt(strokes.Count - 1); // Remove from list
+            Destroy(lastStroke); // Destroy the GameObject
         }
     }
 
-    /// <summary>
-    /// Converts screen touch/mouse position into world space coordinates.
-    /// Ensures the strokes appear in 3D AR space.
-    /// </summary>
-    /// <returns>World position of the touch/mouse input.</returns>
-    Vector3 GetWorldPosition()
+
+    void AddPointToStroke()
     {
-        Vector2 screenPos = touchInput.ReadValue<Vector2>(); // Get touch/mouse position on the screen
-        Ray ray = arCamera.ScreenPointToRay(screenPos); // Cast a ray from the AR camera into the world
-        return ray.origin + ray.direction * 0.5f; // Return a position 0.5m in front of the camera
+        Vector3 worldPosition = GetWorldPosition();
+
+        if (positions.Count == 0 || Vector3.Distance(worldPosition, positions[positions.Count - 1]) > 0.01f)
+        {
+            positions.Add(worldPosition);
+            currentLine.positionCount = positions.Count;
+            currentLine.SetPositions(positions.ToArray());
+        }
     }
 
-    /// <summary>
+    Vector3 GetWorldPosition()
+    {
+        Vector2 screenPos = touchInput.ReadValue<Vector2>();
+        Ray ray = arCamera.ScreenPointToRay(screenPos);
+        return ray.origin + ray.direction * 0.5f;
+    }
+
+
     /// Allows the brush color to be updated from the color picker.
-    /// </summary>
     public void ChangeBrushColor(Color newColor)
     {
         brushColor = newColor;
